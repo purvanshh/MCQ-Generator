@@ -4,9 +4,12 @@ import pdfplumber
 import docx
 from werkzeug.utils import secure_filename
 from fpdf import FPDF
-from langchain_groq import ChatGroq
-from langchain.chains import LLMChain
+import requests
+from dotenv import load_dotenv
 from langchain.prompts import PromptTemplate
+
+# Load environment variables
+load_dotenv()
 
 # Flask app setup
 app = Flask(__name__)
@@ -17,13 +20,6 @@ app.config['ALLOWED_EXTENSIONS'] = {'pdf', 'txt', 'docx'}
 # Ensure directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
-
-# Initialize LangChain LLM
-llm = ChatGroq(
-    api_key="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",
-    model="llama-3.3-70b-versatile",  # Updated model name
-    temperature=0.0
-)
 
 # LangChain prompt template
 mcq_prompt = PromptTemplate(
@@ -50,8 +46,6 @@ Correct Answer: [correct option]
 """
 )
 
-mcq_chain = LLMChain(llm=llm, prompt=mcq_prompt)
-
 # File validation
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -70,10 +64,36 @@ def extract_text_from_file(file_path):
             return file.read()
     return None
 
+# Initialize DeepSeek API settings
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+
+def get_deepseek_response(prompt):
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0
+    }
+    response = requests.post(DEEPSEEK_API_URL, json=data, headers=headers)
+    try:
+        response_data = response.json()
+        if response.status_code == 200:
+            return response_data["choices"][0]["message"]["content"]
+        else:
+            print(f"API Error: {response_data.get('error', {}).get('message', 'Unknown error')}")
+            return ""
+    except Exception as e:
+        print(f"Error processing API response: {str(e)}")
+        return ""
+
 # MCQ generation
 def generate_mcqs_with_langchain(text, num_questions):
-    response = mcq_chain.run({"context": text, "num_questions": num_questions})
-    return response.strip()
+    prompt = mcq_prompt.format(context=text, num_questions=num_questions)
+    return get_deepseek_response(prompt)
 
 # Save MCQs to text file
 def save_mcqs_to_file(mcqs, filename):
@@ -87,12 +107,10 @@ def create_pdf(mcqs, filename):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-
     for mcq in mcqs.split("## MCQ"):
         if mcq.strip():
             pdf.multi_cell(0, 10, mcq.strip())
             pdf.ln(5)
-
     path = os.path.join(app.config['RESULTS_FOLDER'], filename)
     pdf.output(path)
     return path
@@ -106,27 +124,22 @@ def index():
 def generate_mcqs():
     if 'file' not in request.files:
         return "No file uploaded."
-
     file = request.files['file']
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
-
         text = extract_text_from_file(file_path)
         if text:
             num_questions = int(request.form['num_questions'])
             mcqs = generate_mcqs_with_langchain(text, num_questions)
-
             # Save output
             base_name = filename.rsplit('.', 1)[0]
             txt_file = f"generated_mcqs_{base_name}.txt"
             pdf_file = f"generated_mcqs_{base_name}.pdf"
             save_mcqs_to_file(mcqs, txt_file)
             create_pdf(mcqs, pdf_file)
-
             return render_template('results.html', mcqs=mcqs, txt_filename=txt_file, pdf_filename=pdf_file)
-
     return "Invalid file format or upload error."
 
 @app.route('/download/<filename>')

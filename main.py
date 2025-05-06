@@ -15,7 +15,7 @@ OUTPUT_FOLDER = "results"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
-DEEPSEEK_API_KEY = "sk-ff7bcd0a0c854e2d90b8bf0ea3eef308"
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 mcq_prompt = PromptTemplate(
